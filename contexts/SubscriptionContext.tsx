@@ -12,16 +12,36 @@ import Purchases, {
   PurchasesPackage,
   LOG_LEVEL,
 } from 'react-native-purchases';
-import { Alert } from 'react-native';
+import { Alert, Platform } from 'react-native';
 import { supabase } from '../lib/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Key to track which user originally purchased the subscription
 const SUBSCRIPTION_OWNER_KEY = 'unsweet_subscription_owner_id';
 
-// RevenueCat API Key (Apple App Store - Production)
-// From RevenueCat dashboard > Project Settings > API Keys
-const REVENUECAT_API_KEY = 'appl_zADMHAUuBRjmsDDwRGADRcxThaW';
+// ============================================================
+// RevenueCat API Keys - Platform Specific
+// iOS: Uses Apple App Store key (starts with 'appl_')
+// Android: Uses Google Play Store key (starts with 'goog_')
+// Set EXPO_PUBLIC_RC_ANDROID_API_KEY via eas env or .env file
+// ============================================================
+const REVENUECAT_IOS_KEY = 'appl_zADMHAUuBRjmsDDwRGADRcxThaW';
+const REVENUECAT_ANDROID_KEY = process.env.EXPO_PUBLIC_RC_ANDROID_API_KEY || '';
+
+// Select the appropriate API key based on platform
+const getRevenueCatApiKey = (): string | null => {
+  if (Platform.OS === 'ios') {
+    return REVENUECAT_IOS_KEY;
+  }
+  if (Platform.OS === 'android') {
+    if (!REVENUECAT_ANDROID_KEY) {
+      console.warn('[Subscription] ⚠️ Android RevenueCat API key not configured. Set EXPO_PUBLIC_RC_ANDROID_API_KEY.');
+      return null;
+    }
+    return REVENUECAT_ANDROID_KEY;
+  }
+  return null;
+};
 
 // Entitlement identifier configured in RevenueCat dashboard
 const PRO_ENTITLEMENT_ID = 'pro';
@@ -59,12 +79,28 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
     const initPurchases = async () => {
       try {
         if (!isConfigured) {
+          // Get platform-specific API key
+          const apiKey = getRevenueCatApiKey();
+
+          // ============================================================
+          // ANDROID HANDLING: Gracefully handle missing API key
+          // If Android key is not configured, skip RevenueCat initialization
+          // The paywall will show empty but app won't crash
+          // ============================================================
+          if (!apiKey) {
+            console.warn('[Subscription] ⚠️ RevenueCat not configured for this platform');
+            setIsInitialized(true);
+            setIsLoading(false);
+            return;
+          }
+
           // Set log level (use WARN in production to reduce noise)
           Purchases.setLogLevel(__DEV__ ? LOG_LEVEL.DEBUG : LOG_LEVEL.WARN);
 
-          // Configure RevenueCat with the appropriate API key
-          await Purchases.configure({ apiKey: REVENUECAT_API_KEY });
+          // Configure RevenueCat with the platform-specific API key
+          await Purchases.configure({ apiKey });
           isConfigured = true;
+          console.log(`[Subscription] ✓ RevenueCat configured for ${Platform.OS}`);
         }
 
         // Mark as initialized so Paywall knows it can fetch
