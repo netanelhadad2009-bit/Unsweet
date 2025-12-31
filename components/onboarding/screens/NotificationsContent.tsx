@@ -9,6 +9,26 @@ import { useOnboarding } from '../../../contexts/OnboardingContext';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
+// ============================================================
+// ANDROID-ONLY: Setup notification channel before requesting permissions
+// Required for Android 8+ to display notifications properly
+// iOS is NOT affected - skipped via Platform check
+// ============================================================
+async function setupAndroidNotificationChannel(): Promise<void> {
+  if (Platform.OS !== 'android') return;
+
+  try {
+    await Notifications.setNotificationChannelAsync('default', {
+      name: 'Default',
+      importance: Notifications.AndroidImportance.MAX,
+      vibrationPattern: [0, 250, 250, 250],
+      lightColor: '#10B981',
+    });
+  } catch {
+    // Silently handle - channel creation might fail on some devices
+  }
+}
+
 const COLORS = {
   iosBlue: '#007AFF', cardBg: '#E8E8E8', white: '#FFFFFF', black: '#000000',
   errorRed: '#F87171', errorBg: 'rgba(239, 68, 68, 0.1)', errorBorder: 'rgba(239, 68, 68, 0.2)',
@@ -73,7 +93,27 @@ export default function NotificationsContent() {
     try {
       setLoading(true);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      const { status } = await Notifications.requestPermissionsAsync();
+
+      // ============================================================
+      // ANDROID-ONLY: Setup notification channel BEFORE requesting permission
+      // This is required for Android 8+ and helps with Android 13+ permission flow
+      // iOS skips this step (handled inside the function)
+      // ============================================================
+      await setupAndroidNotificationChannel();
+
+      // Request notification permissions
+      // On Android 13+, this triggers the POST_NOTIFICATIONS runtime permission dialog
+      // On iOS, this triggers the standard iOS notification permission dialog
+      const { status } = await Notifications.requestPermissionsAsync({
+        android: {
+          // Request all notification capabilities on Android
+          allowAlert: true,
+          allowBadge: true,
+          allowSound: true,
+          allowAnnouncements: true,
+        },
+      });
+
       const isGranted = status === 'granted';
       if (isGranted) {
         setPermissionStatus('granted');
@@ -84,6 +124,7 @@ export default function NotificationsContent() {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
       }
     } catch {
+      // On error, continue to next screen rather than blocking the user
       setTimeout(() => goToNextScreen(), 1000);
     } finally { setLoading(false); }
   }
@@ -117,7 +158,13 @@ export default function NotificationsContent() {
         </Animated.View>
       ) : (
         <Animated.View style={[styles.deniedContainer, { opacity: cardAnim, transform: [{ scale: cardScale }] }]}>
-          <View style={styles.errorBox}><Text style={styles.errorText}>Notifications denied. You can enable them from Settings later.</Text></View>
+          <View style={styles.errorBox}>
+            <Text style={styles.errorText}>
+              {Platform.OS === 'android'
+                ? "Notifications are disabled. On Android, you'll need to enable them in your device Settings to receive meal reminders."
+                : "Notifications denied. You can enable them from Settings later."}
+            </Text>
+          </View>
           <TouchableOpacity style={styles.settingsButton} onPress={handleOpenSettings} activeOpacity={0.8}>
             <SettingsIcon size={20} color={COLORS.white} /><Text style={styles.settingsButtonText}>Open Settings</Text>
           </TouchableOpacity>
