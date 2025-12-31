@@ -671,28 +671,30 @@ export default function SignUpScreen() {
 
             {/* SSO Buttons */}
             <View style={styles.ssoContainer}>
-              {/* Apple Sign In Button */}
-              <Pressable
-                style={({ pressed }) => [
-                  styles.ssoButton,
-                  styles.appleButton,
-                  pressed && styles.ssoButtonPressed,
-                  isLoading && styles.buttonDisabled,
-                ]}
-                onPress={handleAppleSignIn}
-                disabled={isLoading}
-              >
-                {loadingProvider === 'apple' ? (
-                  <ActivityIndicator color="#FFFFFF" size="small" />
-                ) : (
-                  <>
-                    <AppleIcon />
-                    <Text style={styles.appleButtonText}>
-                      Continue with Apple
-                    </Text>
-                  </>
-                )}
-              </Pressable>
+              {/* Apple Sign In Button - iOS ONLY */}
+              {Platform.OS === 'ios' && (
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.ssoButton,
+                    styles.appleButton,
+                    pressed && styles.ssoButtonPressed,
+                    isLoading && styles.buttonDisabled,
+                  ]}
+                  onPress={handleAppleSignIn}
+                  disabled={isLoading}
+                >
+                  {loadingProvider === 'apple' ? (
+                    <ActivityIndicator color="#FFFFFF" size="small" />
+                  ) : (
+                    <>
+                      <AppleIcon />
+                      <Text style={styles.appleButtonText}>
+                        Continue with Apple
+                      </Text>
+                    </>
+                  )}
+                </Pressable>
+              )}
 
               {/* Google Sign In Button */}
               <Pressable
