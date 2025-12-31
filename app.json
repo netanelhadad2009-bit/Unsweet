@@ -1,0 +1,104 @@
+{
+  "expo": {
+    "name": "Unsweet",
+    "slug": "unsweet",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FFFFFF"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.dropbusiness.unsweet",
+      "appleTeamId": "K5SDH2PTSX",
+      "usesAppleSignIn": true,
+      "newArchEnabled": true,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSUserTrackingUsageDescription": "This identifier will be used to deliver personalized ads and measure ad effectiveness."
+      },
+      "buildNumber": "36"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#00C897"
+      },
+      "package": "com.dropbusiness.unsweet",
+      "versionCode": 8,
+      "newArchEnabled": true,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "scheme": "unsweet",
+    "plugins": [
+      "expo-secure-store",
+      "expo-router",
+      "expo-apple-authentication",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "newArchEnabled": true
+          },
+          "android": {
+            "newArchEnabled": true
+          }
+        }
+      ],
+      "expo-asset",
+      "expo-font",
+      "expo-web-browser",
+      "expo-splash-screen",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#00C897"
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Unsweet to access your camera to scan food and barcodes."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Unsweet to access your photos to analyze food images."
+        }
+      ],
+      "@react-native-community/datetimepicker",
+      [
+        "react-native-appsflyer",
+        {
+          "devKey": "Tm4JBxwBJwU7s9kuDWw9qE",
+          "isDebug": false,
+          "oneLinkDomain": "unsweet.onelink.me",
+          "timeToWaitForATTUserAuthorization": 60
+        }
+      ],
+      "expo-tracking-transparency",
+      "./plugins/withAndroidManifestFix"
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "3ed51472-ccf7-444d-bcf0-b9c6c70a6d0a"
+      }
+    }
+  }
+}
