@@ -19,6 +19,7 @@ import {
   Alert,
   Linking,
   Animated,
+  Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -484,7 +485,7 @@ export default function Paywall() {
         <View style={styles.trustContainer}>
           <Lock size={14} color={Theme.colors.text.muted} strokeWidth={2} />
           <Text style={styles.trustText}>
-            Secure payment via Apple. Cancel anytime.
+            Secure payment via {Platform.OS === 'ios' ? 'Apple' : 'Google Play'}. Cancel anytime.
           </Text>
         </View>
 

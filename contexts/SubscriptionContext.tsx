@@ -23,10 +23,9 @@ const SUBSCRIPTION_OWNER_KEY = 'unsweet_subscription_owner_id';
 // RevenueCat API Keys - Platform Specific
 // iOS: Uses Apple App Store key (starts with 'appl_')
 // Android: Uses Google Play Store key (starts with 'goog_')
-// Set EXPO_PUBLIC_RC_ANDROID_API_KEY via eas env or .env file
 // ============================================================
 const REVENUECAT_IOS_KEY = 'appl_zADMHAUuBRjmsDDwRGADRcxThaW';
-const REVENUECAT_ANDROID_KEY = process.env.EXPO_PUBLIC_RC_ANDROID_API_KEY || '';
+const REVENUECAT_ANDROID_KEY = 'goog_hbZzCLgRKcMWYpkzjLEKIavlsXd';
 
 // Select the appropriate API key based on platform
 const getRevenueCatApiKey = (): string | null => {
@@ -34,10 +33,6 @@ const getRevenueCatApiKey = (): string | null => {
     return REVENUECAT_IOS_KEY;
   }
   if (Platform.OS === 'android') {
-    if (!REVENUECAT_ANDROID_KEY) {
-      console.warn('[Subscription] ⚠️ Android RevenueCat API key not configured. Set EXPO_PUBLIC_RC_ANDROID_API_KEY.');
-      return null;
-    }
     return REVENUECAT_ANDROID_KEY;
   }
   return null;
