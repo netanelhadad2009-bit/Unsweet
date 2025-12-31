@@ -29,7 +29,12 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#00C897"
+        "backgroundColor": "#FFFFFF"
+      },
+      "splash": {
+        "image": "./assets/splash.png",
+        "resizeMode": "contain",
+        "backgroundColor": "#FFFFFF"
       },
       "package": "com.dropbusiness.unsweet",
       "versionCode": 8,
