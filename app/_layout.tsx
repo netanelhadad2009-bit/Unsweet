@@ -9,7 +9,7 @@
  */
 
 import { Stack, useRouter, useSegments, Redirect } from 'expo-router';
-import { View, StyleSheet, Text, Pressable, Image, Modal, Platform, InteractionManager, I18nManager } from 'react-native';
+import { View, StyleSheet, Text, Pressable, Image, Modal, Platform, InteractionManager, I18nManager, BackHandler } from 'react-native';
 import { useEffect, useState, useCallback, useRef } from 'react';
 
 // ============================================================
@@ -251,6 +251,29 @@ export default function RootLayout() {
       initializeNotifications();
     }
   }, [initialized, session]);
+
+  // ============================================================
+  // ANDROID-ONLY: Hardware Back Button Handler
+  // Provides native Android navigation experience
+  // iOS is NOT affected - wrapped in Platform.OS check
+  // ============================================================
+  useEffect(() => {
+    // Skip entirely on iOS - this effect does nothing on iOS
+    if (Platform.OS !== 'android') return;
+
+    const handleBackPress = () => {
+      // Check if we can go back in the navigation stack
+      if (router.canGoBack()) {
+        router.back();
+        return true; // Prevent default behavior (exit app)
+      }
+      // At root - allow default behavior (minimize/exit app)
+      return false;
+    };
+
+    const subscription = BackHandler.addEventListener('hardwareBackPress', handleBackPress);
+    return () => subscription.remove();
+  }, [router]);
 
   // AppsFlyer SDK initialization with ATT request
   const appsFlyerInitialized = useRef(false);
