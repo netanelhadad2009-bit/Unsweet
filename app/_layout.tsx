@@ -9,8 +9,18 @@
  */
 
 import { Stack, useRouter, useSegments, Redirect } from 'expo-router';
-import { View, StyleSheet, Text, Pressable, Image, Modal, Platform, InteractionManager } from 'react-native';
+import { View, StyleSheet, Text, Pressable, Image, Modal, Platform, InteractionManager, I18nManager } from 'react-native';
 import { useEffect, useState, useCallback, useRef } from 'react';
+
+// ============================================================
+// ANDROID-ONLY: Force RTL (Right-to-Left) layout
+// This runs once when the module loads, before any component mounts
+// iOS is NOT affected - this check ensures iOS Gold Master stays untouched
+// ============================================================
+if (Platform.OS === 'android') {
+  I18nManager.allowRTL(true);
+  I18nManager.forceRTL(true);
+}
 import * as Linking from 'expo-linking';
 import * as SplashScreen from 'expo-splash-screen';
 import { requestTrackingPermissionsAsync } from 'expo-tracking-transparency';
