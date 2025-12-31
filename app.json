@@ -34,6 +34,7 @@
       "package": "com.dropbusiness.unsweet",
       "versionCode": 8,
       "newArchEnabled": true,
+      "supportsRtl": false,
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO"

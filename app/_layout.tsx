@@ -13,13 +13,13 @@ import { View, StyleSheet, Text, Pressable, Image, Modal, Platform, InteractionM
 import { useEffect, useState, useCallback, useRef } from 'react';
 
 // ============================================================
-// ANDROID-ONLY: Force RTL (Right-to-Left) layout
-// This runs once when the module loads, before any component mounts
+// ANDROID-ONLY: Force LTR (Left-to-Right) layout
+// Prevents Hebrew/Arabic system language from flipping the English app UI
 // iOS is NOT affected - this check ensures iOS Gold Master stays untouched
 // ============================================================
 if (Platform.OS === 'android') {
-  I18nManager.allowRTL(true);
-  I18nManager.forceRTL(true);
+  I18nManager.allowRTL(false);
+  I18nManager.forceRTL(false);
 }
 import * as Linking from 'expo-linking';
 import * as SplashScreen from 'expo-splash-screen';
