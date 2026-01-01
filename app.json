@@ -24,7 +24,7 @@
         "ITSAppUsesNonExemptEncryption": false,
         "NSUserTrackingUsageDescription": "This identifier will be used to deliver personalized ads and measure ad effectiveness."
       },
-      "buildNumber": "36"
+      "buildNumber": "45"
     },
     "android": {
       "adaptiveIcon": {
@@ -37,7 +37,7 @@
         "backgroundColor": "#FFFFFF"
       },
       "package": "com.dropbusiness.unsweet",
-      "versionCode": 9,
+      "versionCode": 15,
       "newArchEnabled": true,
       "supportsRtl": false,
       "permissions": [

@@ -80,19 +80,19 @@ export default function NotificationsContent() {
     if (!Device.isDevice) { setPermissionStatus('prompt'); return; }
     try {
       // ============================================================
-      // ANDROID 13+ FIX: Check canAskAgain to determine if we can
-      // show the native permission dialog or need to redirect to Settings
+      // ANDROID 13+ FIX: Always show prompt UI on initial check
+      // Android 13+ can return canAskAgain=false even on fresh install
+      // before ever requesting permission. Only show Settings UI AFTER
+      // the user has actually tried to request permission.
       // ============================================================
-      const { status, canAskAgain } = await Notifications.getPermissionsAsync();
+      const { status } = await Notifications.getPermissionsAsync();
 
       if (status === 'granted') {
         // Already granted - skip this screen
         goToNextScreen();
-      } else if (status === 'denied' && canAskAgain === false) {
-        // Permanently denied - must use Settings (Android "Don't ask again" or iOS denied)
-        setPermissionStatus('denied');
       } else {
-        // Undetermined OR denied-but-can-ask-again - show prompt to trigger native dialog
+        // Not granted - always show prompt UI first
+        // Settings UI will only appear after user tries to enable and gets denied
         setPermissionStatus('prompt');
       }
     } catch { setPermissionStatus('prompt'); }

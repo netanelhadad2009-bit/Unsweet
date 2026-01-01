@@ -154,12 +154,31 @@ const LIFE_MINUTES_PER_DAY = 15; // Minutes of life regained per sugar-free day
 // 24-hour inactivity check for check-in streak (calendar sequence)
 // This is SEPARATE from the main sugar-free streak (quit_date)
 // IMPORTANT: These keys are user-scoped via STREAK_USER_KEY to prevent cross-user contamination
-const LAST_ACTIVITY_KEY = 'unsweet_last_activity';
-const CHECKIN_STREAK_START_KEY = 'unsweet_checkin_streak_start'; // When current check-in sequence started
+const LAST_VISIT_DATE_KEY = 'unsweet_last_visit_date'; // Stores "YYYY-MM-DD" string
+const CURRENT_STREAK_KEY = 'unsweet_current_streak'; // Stores streak count as string
 const CHECKIN_STREAK_VERSION_KEY = 'unsweet_checkin_streak_version'; // Migration version
 const STREAK_USER_KEY = 'unsweet_streak_user_id'; // Tracks which user owns the streak data
-const CURRENT_CHECKIN_VERSION = '3'; // Increment this to trigger re-initialization (was 2, now 3 for user-scoping fix)
-const INACTIVITY_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+// Legacy keys for migration
+const LEGACY_LAST_ACTIVITY_KEY = 'unsweet_last_activity';
+const LEGACY_CHECKIN_STREAK_START_KEY = 'unsweet_checkin_streak_start';
+const CURRENT_CHECKIN_VERSION = '4'; // Increment to trigger migration to Calendar Day approach
+
+/**
+ * Helper: Get today's date as "YYYY-MM-DD" string
+ */
+function getTodayDateString(): string {
+  const now = new Date();
+  return format(now, 'yyyy-MM-dd');
+}
+
+/**
+ * Helper: Check if a date string is "yesterday" relative to today
+ */
+function isYesterday(dateStr: string): boolean {
+  const yesterday = subDays(new Date(), 1);
+  const yesterdayStr = format(yesterday, 'yyyy-MM-dd');
+  return dateStr === yesterdayStr;
+}
 
 // Streak celebration tracking - show celebration only once per day when streak increases
 const STREAK_CELEBRATION_DATE_KEY = 'unsweet_streak_celebration_date';
@@ -402,110 +421,117 @@ export default function DashboardScreen() {
           const longestStreak = data.longest_streak;
           const longestStreakMs = data.longest_streak_ms;
 
-          // Check for 24-hour inactivity - only affects check-in streak (calendar sequence)
+          // ============================================================
+          // CHECK-IN STREAK LOGIC (Calendar Day Approach)
+          // ============================================================
+          // Uses "YYYY-MM-DD" date string comparison for reliable day boundaries
           // This does NOT affect the main sugar-free streak (quit_date)
           try {
             const storedUserId = await AsyncStorage.getItem(STREAK_USER_KEY);
-            let lastActivityStr = await AsyncStorage.getItem(LAST_ACTIVITY_KEY);
-            let checkinStartStr = await AsyncStorage.getItem(CHECKIN_STREAK_START_KEY);
+            let lastVisitStr = await AsyncStorage.getItem(LAST_VISIT_DATE_KEY);
+            let currentStreakStr = await AsyncStorage.getItem(CURRENT_STREAK_KEY);
             const checkinVersion = await AsyncStorage.getItem(CHECKIN_STREAK_VERSION_KEY);
-            const now = new Date();
-            const nowMs = now.getTime();
-            const nowIso = now.toISOString();
+            const todayStr = getTodayDateString();
 
             // USER SCOPING: If streak data belongs to a different user, clear it all
-            // This prevents cross-user contamination when switching accounts
             if (storedUserId && storedUserId !== user.id) {
               await AsyncStorage.multiRemove([
-                LAST_ACTIVITY_KEY,
-                CHECKIN_STREAK_START_KEY,
+                LAST_VISIT_DATE_KEY,
+                CURRENT_STREAK_KEY,
                 CHECKIN_STREAK_VERSION_KEY,
                 STREAK_CELEBRATION_DATE_KEY,
                 STREAK_CELEBRATION_COUNT_KEY,
+                // Also clean up legacy keys
+                LEGACY_LAST_ACTIVITY_KEY,
+                LEGACY_CHECKIN_STREAK_START_KEY,
               ]);
-              // Reset local variables to trigger re-initialization
-              lastActivityStr = null;
-              checkinStartStr = null;
+              lastVisitStr = null;
+              currentStreakStr = null;
             }
 
             // Store current user ID for future checks
             await AsyncStorage.setItem(STREAK_USER_KEY, user.id);
 
-            // Migration: If version is outdated, clear check-in streak to re-initialize properly
+            // Migration: If version is outdated, clear old keys and re-initialize
             if (checkinVersion !== CURRENT_CHECKIN_VERSION) {
-              await AsyncStorage.removeItem(CHECKIN_STREAK_START_KEY);
+              // Clean up legacy keys
+              await AsyncStorage.multiRemove([
+                LEGACY_LAST_ACTIVITY_KEY,
+                LEGACY_CHECKIN_STREAK_START_KEY,
+              ]);
               await AsyncStorage.setItem(CHECKIN_STREAK_VERSION_KEY, CURRENT_CHECKIN_VERSION);
-              checkinStartStr = null; // Force re-initialization below
+              lastVisitStr = null; // Force re-initialization
+              currentStreakStr = null;
             }
 
-            if (lastActivityStr) {
-              const lastActivityMs = parseInt(lastActivityStr, 10);
-              // Guard against NaN from corrupted data
-              if (!isNaN(lastActivityMs)) {
-                const timeSinceLastActivity = nowMs - lastActivityMs;
+            // ============================================================
+            // CALENDAR DAY STREAK ALGORITHM
+            // ============================================================
+            // Case A: First time (lastVisitStr is null) → Set streak = 1
+            // Case B: Same day (todayStr === lastVisitStr) → Do nothing
+            // Case C: Yesterday → Increment streak (+1)
+            // Case D: Older than yesterday → Reset streak to 1
+            // IMPORTANT: Calculate BEFORE saving new date
+            let currentStreak = currentStreakStr ? parseInt(currentStreakStr, 10) : 0;
+            if (isNaN(currentStreak)) currentStreak = 0;
 
-                // If more than 24 hours since last app open, reset ONLY the check-in streak
-                if (timeSinceLastActivity > INACTIVITY_THRESHOLD_MS) {
-                  // Reset check-in streak start to now (but keep sugar-free quit_date unchanged!)
-                  await AsyncStorage.setItem(CHECKIN_STREAK_START_KEY, nowIso);
+            let newStreak: number;
+            let showResetAlert = false;
 
-                  // Notify user about check-in streak reset (not the main streak)
-                  Alert.alert(
-                    'Check-in Streak Reset',
-                    "It's been more than 24 hours since your last visit. Your daily check-in streak has reset, but your sugar-free streak is still going!",
-                    [{ text: 'OK', style: 'default' }]
-                  );
-                }
+            if (!lastVisitStr) {
+              // Case A: First time ever → Set streak = 1
+              newStreak = 1;
+              console.log(`Checking Streak: Today=[${todayStr}], LastVisit=[null], Resulting Streak=[${newStreak}]`);
+            } else if (todayStr === lastVisitStr) {
+              // Case B: Same day → Do NOTHING (keep current streak)
+              newStreak = currentStreak;
+              console.log(`Checking Streak: Today=[${todayStr}], LastVisit=[${lastVisitStr}], Resulting Streak=[${newStreak}] (same day)`);
+            } else if (isYesterday(lastVisitStr)) {
+              // Case C: Yesterday → Increment streak (+1)
+              newStreak = currentStreak + 1;
+              console.log(`Checking Streak: Today=[${todayStr}], LastVisit=[${lastVisitStr}], Resulting Streak=[${newStreak}] (consecutive)`);
+            } else {
+              // Case D: Older than yesterday → Reset streak to 1
+              newStreak = 1;
+              showResetAlert = true;
+              console.log(`Checking Streak: Today=[${todayStr}], LastVisit=[${lastVisitStr}], Resulting Streak=[${newStreak}] (reset)`);
+            }
+
+            // Save the new streak and today's date (AFTER calculation)
+            await AsyncStorage.setItem(CURRENT_STREAK_KEY, newStreak.toString());
+            await AsyncStorage.setItem(LAST_VISIT_DATE_KEY, todayStr);
+
+            // Update display
+            setCheckinStreakDays(newStreak);
+
+            // Show reset alert if streak was reset (Case D)
+            if (showResetAlert) {
+              Alert.alert(
+                'Check-in Streak Reset',
+                "It's been more than a day since your last visit. Your daily check-in streak has reset, but your sugar-free streak is still going!",
+                [{ text: 'OK', style: 'default' }]
+              );
+            }
+
+            // Check if we should show streak celebration
+            try {
+              const lastCelebrationDate = await AsyncStorage.getItem(STREAK_CELEBRATION_DATE_KEY);
+              const lastCelebrationCountStr = await AsyncStorage.getItem(STREAK_CELEBRATION_COUNT_KEY);
+              const lastCelebrationCount = lastCelebrationCountStr ? parseInt(lastCelebrationCountStr, 10) : 0;
+
+              // Show celebration if:
+              // 1. We haven't shown celebration today (new day)
+              // 2. Current streak is greater than last celebrated streak
+              // 3. Streak is at least 1 day
+              if (lastCelebrationDate !== todayStr && newStreak > lastCelebrationCount && newStreak >= 1) {
+                setCelebrationStreakCount(newStreak);
+                setCelebrationModalVisible(true);
+
+                await AsyncStorage.setItem(STREAK_CELEBRATION_DATE_KEY, todayStr);
+                await AsyncStorage.setItem(STREAK_CELEBRATION_COUNT_KEY, newStreak.toString());
               }
-            }
-
-            // Initialize check-in streak start if not exists
-            // NOTE: Check-in streak is INDEPENDENT from sugar-free streak (quit_date)
-            // - Sugar-free streak (quit_date) = total time since journey started (never resets except via "I Relapsed")
-            // - Check-in streak = consecutive days of app opens (resets after 24hr inactivity)
-            if (!checkinStartStr) {
-              // First time user or streak was just reset - start from today
-              await AsyncStorage.setItem(CHECKIN_STREAK_START_KEY, nowIso);
-            }
-            // NOTE: We no longer reset check-in streak to quit_date
-            // The check-in streak should only track consecutive app opens, not journey duration
-
-            // Update last activity timestamp
-            await AsyncStorage.setItem(LAST_ACTIVITY_KEY, nowMs.toString());
-
-            // Calculate check-in streak days for display
-            // Read the final value (after any resets or fixes)
-            const finalCheckinStart = await AsyncStorage.getItem(CHECKIN_STREAK_START_KEY);
-            if (finalCheckinStart) {
-              const checkinDate = startOfDay(new Date(finalCheckinStart));
-              const today = startOfDay(new Date());
-              const diffMs = today.getTime() - checkinDate.getTime();
-              const days = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
-              setCheckinStreakDays(days);
-
-              // Check if we should show streak celebration
-              // Only show if: 1) It's a new day, 2) Streak has increased
-              try {
-                const todayStr = format(today, 'yyyy-MM-dd');
-                const lastCelebrationDate = await AsyncStorage.getItem(STREAK_CELEBRATION_DATE_KEY);
-                const lastCelebrationCountStr = await AsyncStorage.getItem(STREAK_CELEBRATION_COUNT_KEY);
-                const lastCelebrationCount = lastCelebrationCountStr ? parseInt(lastCelebrationCountStr, 10) : 0;
-
-                // Show celebration if:
-                // 1. We haven't shown celebration today (new day)
-                // 2. Current streak is greater than last celebrated streak (streak increased)
-                // 3. Streak is at least 1 day (don't celebrate day 0)
-                if (lastCelebrationDate !== todayStr && days > lastCelebrationCount && days >= 1) {
-                  setCelebrationStreakCount(days);
-                  setCelebrationModalVisible(true);
-
-                  // Update last celebration date and count
-                  await AsyncStorage.setItem(STREAK_CELEBRATION_DATE_KEY, todayStr);
-                  await AsyncStorage.setItem(STREAK_CELEBRATION_COUNT_KEY, days.toString());
-                }
-              } catch (celebrationError) {
-                // Silently handle celebration check errors
-              }
+            } catch (celebrationError) {
+              // Silently handle celebration check errors
             }
           } catch (storageError) {
             // Silently handle AsyncStorage errors

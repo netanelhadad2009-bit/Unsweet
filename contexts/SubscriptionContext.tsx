@@ -172,6 +172,26 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
         }
       } catch (error) {
         console.error('[Subscription] ❌ Failed to sync RevenueCat user:', error);
+
+        // Reset ref on error to allow retry on next attempt
+        currentRevenueCatUserId.current = null;
+
+        // CRITICAL: On error, still try to determine subscription status
+        // This prevents users from being stuck in limbo after failed sync
+        try {
+          const fallbackInfo = await Purchases.getCustomerInfo();
+          if (userId) {
+            await updateProStatus(fallbackInfo, userId);
+          } else {
+            await updateProStatus(fallbackInfo);
+          }
+          setCustomerInfo(fallbackInfo);
+          console.log('[Subscription] ✓ Fallback customer info retrieved');
+        } catch (fallbackError) {
+          console.error('[Subscription] ❌ Fallback also failed:', fallbackError);
+          // Last resort: explicitly set isPro to false so navigation can proceed
+          setIsPro(false);
+        }
       } finally {
         // Clear timeout and syncing state
         if (timeoutId) clearTimeout(timeoutId);
@@ -229,12 +249,12 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
           return;
         }
 
-        // Case 2: Different owner stored → DENY (subscription belongs to someone else on this device)
-        // This prevents subscription ghosting when User B logs in after User A on same device
+        // Case 2: Different owner stored → TRANSFER ownership (RevenueCat handles backend transfer)
+        // Since RevenueCat is configured to "Transfer to new App User ID", we simply update local ownership
         if (storedOwnerId && storedOwnerId !== userId) {
-          console.log('[Subscription] ⚠️ Subscription belongs to different user, denying Pro access');
-          console.log(`[Subscription] Owner: ${storedOwnerId}, Current: ${userId}`);
-          setIsPro(false);
+          console.log('[Subscription] Transferring subscription ownership from', storedOwnerId, 'to', userId);
+          await AsyncStorage.setItem(SUBSCRIPTION_OWNER_KEY, userId);
+          setIsPro(true);
           return;
         }
 
@@ -254,9 +274,32 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
         setIsPro(true);
         return;
       }
+    } else {
+      // No userId provided - try to get current user from Supabase
+      // This handles the case when RevenueCat listener fires without userId context
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user?.id) {
+          // Recursively call with the userId to do proper ownership checks
+          await updateProStatus(info, user.id);
+          return;
+        }
+        // User not available yet but has entitlement - grant access
+        // This handles race conditions during login where RevenueCat listener
+        // fires before Supabase session is fully established
+        console.log('[Subscription] No user session yet but has entitlement - granting Pro access');
+        setIsPro(true);
+        return;
+      } catch {
+        // If we can't get user but have entitlement, grant access for UX
+        console.log('[Subscription] Error getting user but has entitlement - granting Pro access');
+        setIsPro(true);
+        return;
+      }
     }
 
-    // No userId provided (anonymous) - don't grant Pro
+    // This line should never be reached now, but keep as safety fallback
+    // Truly anonymous (no session) - don't grant Pro
     setIsPro(false);
   };
 
@@ -318,22 +361,11 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
         return false;
       }
 
-      // SECURITY: Check ownership before granting access
+      // Auto-transfer: Claim ownership for current user (RevenueCat handles backend transfer)
       const storedOwnerId = await AsyncStorage.getItem(SUBSCRIPTION_OWNER_KEY);
-
       if (storedOwnerId && storedOwnerId !== user.id) {
-        // Different owner - subscription belongs to another account
-        console.log('[Subscription] ⚠️ Restore blocked: subscription belongs to different user');
-        setCustomerInfo(info);
-        setIsPro(false);
-        Alert.alert(
-          'Cannot Restore',
-          'This subscription belongs to a different account. Please log in with the original account that made the purchase.'
-        );
-        return false;
+        console.log('[Subscription] Transferring subscription ownership from', storedOwnerId, 'to', user.id);
       }
-
-      // No owner recorded or same owner - claim/confirm ownership and grant access
       await AsyncStorage.setItem(SUBSCRIPTION_OWNER_KEY, user.id);
       console.log('[Subscription] ✓ Restore successful, owner recorded:', user.id);
       setIsPro(true);
@@ -359,41 +391,17 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
         return false;
       }
 
-      // Check current entitlement status BEFORE purchase
-      // This helps us detect if Apple restored an existing subscription vs charged for new
-      const preInfo = await Purchases.getCustomerInfo();
-      const hadProBefore = typeof preInfo.entitlements.active[PRO_ENTITLEMENT_ID] !== 'undefined';
-
-      // SECURITY: If user already has entitlement AND a different owner exists
-      // This means they're trying to use someone else's subscription
-      const storedOwnerId = await AsyncStorage.getItem(SUBSCRIPTION_OWNER_KEY);
-      if (hadProBefore && storedOwnerId && storedOwnerId !== user.id) {
-        console.log('[Subscription] ⚠️ Purchase blocked: user has inherited entitlement from different owner');
-        Alert.alert(
-          'Subscription Exists',
-          'An active subscription from a different account was found on this device. Please log in with the original account, or contact support.'
-        );
-        return false;
-      }
-
       setIsLoading(true);
       const { customerInfo: info } = await Purchases.purchasePackage(pkg);
 
       const hasProEntitlement = typeof info.entitlements.active[PRO_ENTITLEMENT_ID] !== 'undefined';
 
       if (hasProEntitlement) {
-        // SECURITY: Check if this was a ghosted restoration (had entitlement before, different owner)
-        // If they had no entitlement before and have it now → legitimate new purchase
-        // If they had entitlement before but same owner or no owner → legitimate renewal/claim
-        if (hadProBefore && storedOwnerId && storedOwnerId !== user.id) {
-          // This shouldn't happen as we block above, but double-check
-          console.log('[Subscription] ⚠️ Ghosting detected after purchase');
-          setIsPro(false);
-          setCustomerInfo(info);
-          return false;
+        // Auto-transfer: Claim ownership for current user (RevenueCat handles backend transfer)
+        const storedOwnerId = await AsyncStorage.getItem(SUBSCRIPTION_OWNER_KEY);
+        if (storedOwnerId && storedOwnerId !== user.id) {
+          console.log('[Subscription] Transferring subscription ownership from', storedOwnerId, 'to', user.id);
         }
-
-        // Record this user as the subscription owner
         await AsyncStorage.setItem(SUBSCRIPTION_OWNER_KEY, user.id);
         console.log('[Subscription] ✓ Purchase successful, owner recorded:', user.id);
         setIsPro(true);
@@ -416,7 +424,7 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
       // RevenueCat is configured to "Transfer to new App User ID" so
       // restoring will sync the subscription to the current user.
       // ============================================================
-      if (error.code === PURCHASES_ERROR_CODE.PRODUCT_ALREADY_PURCHASED) {
+      if (error.code === PURCHASES_ERROR_CODE.PRODUCT_ALREADY_PURCHASED_ERROR) {
         console.log('[Subscription] Product already purchased - attempting auto-restore...');
 
         try {
@@ -427,22 +435,11 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
             // Get current user for ownership tracking
             const { data: { user } } = await supabase.auth.getUser();
             if (user?.id) {
-              // Check ownership before granting access
+              // Auto-transfer: Claim ownership for current user (RevenueCat handles backend transfer)
               const storedOwnerId = await AsyncStorage.getItem(SUBSCRIPTION_OWNER_KEY);
-
               if (storedOwnerId && storedOwnerId !== user.id) {
-                // Different owner - subscription belongs to another account
-                console.log('[Subscription] ⚠️ Auto-restore blocked: subscription belongs to different user');
-                setCustomerInfo(restoredInfo);
-                setIsPro(false);
-                Alert.alert(
-                  'Subscription Conflict',
-                  'This subscription is linked to a different account. Please log in with the original account.'
-                );
-                return false;
+                console.log('[Subscription] Transferring subscription ownership from', storedOwnerId, 'to', user.id);
               }
-
-              // Claim ownership and grant access
               await AsyncStorage.setItem(SUBSCRIPTION_OWNER_KEY, user.id);
               console.log('[Subscription] ✓ Auto-restore successful, owner recorded:', user.id);
               setIsPro(true);
