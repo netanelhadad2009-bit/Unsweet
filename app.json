@@ -8,7 +8,7 @@
     "userInterfaceStyle": "light",
     "splash": {
       "image": "./assets/splash.png",
-      "resizeMode": "contain",
+      "resizeMode": "cover",
       "backgroundColor": "#FFFFFF"
     },
     "assetBundlePatterns": [
@@ -32,12 +32,12 @@
         "backgroundColor": "#FFFFFF"
       },
       "splash": {
-        "image": "./assets/splash.png",
+        "image": "./assets/android-splash.png",
         "resizeMode": "contain",
         "backgroundColor": "#FFFFFF"
       },
       "package": "com.dropbusiness.unsweet",
-      "versionCode": 8,
+      "versionCode": 9,
       "newArchEnabled": true,
       "supportsRtl": false,
       "permissions": [
