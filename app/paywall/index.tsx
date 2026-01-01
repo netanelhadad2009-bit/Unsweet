@@ -137,6 +137,10 @@ export default function Paywall() {
   const [isPurchasing, setIsPurchasing] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
 
+  // Track if we're in the middle of a purchase flow (prevents white screen)
+  // This keeps paywall visible until success alert is dismissed
+  const isPurchasingRef = useRef(false);
+
   // Ref to track if offerings loaded (avoids stale closure in timeout)
   const offeringsLoadedRef = useRef(false);
 
@@ -276,9 +280,10 @@ export default function Paywall() {
     return () => clearTimeout(timeout);
   }, [isInitialized, fetchOfferings]);
 
-  // Redirect if Pro
+  // Redirect if Pro (but NOT during active purchase flow)
   useEffect(() => {
-    if (isPro) {
+    // Don't auto-redirect during purchase - let the success alert handle navigation
+    if (isPro && !isPurchasingRef.current) {
       router.replace('/(tabs)');
     }
   }, [isPro, router]);
@@ -288,9 +293,10 @@ export default function Paywall() {
   // Return null if:
   // 1. Still checking auth state
   // 2. User is not authenticated (shouldn't be here)
-  // 3. User is Pro (being redirected to tabs)
+  // 3. User is Pro AND not currently purchasing (being redirected to tabs)
   // 4. Still syncing user (subscription status unknown)
-  if (isAuthenticated === null || !isAuthenticated || isPro || isSyncingUser) {
+  // IMPORTANT: Keep paywall visible during purchase to prevent white screen
+  if (isAuthenticated === null || !isAuthenticated || (isPro && !isPurchasingRef.current) || isSyncingUser) {
     return null;
   }
 
@@ -311,6 +317,9 @@ export default function Paywall() {
     }
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+    // Set purchasing flag BEFORE starting - prevents white screen
+    isPurchasingRef.current = true;
     setIsPurchasing(true);
 
     try {
@@ -319,9 +328,19 @@ export default function Paywall() {
 
       if (success) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        // Show success alert, then navigate on dismiss
         Alert.alert('Welcome to Pro!', 'You now have full access to all features.', [
-          { text: 'Let\'s Go!', onPress: () => router.replace('/(tabs)') }
+          {
+            text: 'Let\'s Go!',
+            onPress: () => {
+              isPurchasingRef.current = false; // Clear flag before navigating
+              router.replace('/(tabs)');
+            }
+          }
         ]);
+        // Don't clear isPurchasingRef here - wait for alert dismissal
+        setIsPurchasing(false);
+        return;
       }
       // If not successful, the purchasePackage function shows appropriate alerts
     } catch (error: unknown) {
@@ -335,6 +354,10 @@ export default function Paywall() {
       }
     } finally {
       setIsPurchasing(false);
+      // Clear purchasing flag on failure/cancel (success clears on alert dismiss)
+      if (!isPro) {
+        isPurchasingRef.current = false;
+      }
     }
   };
 

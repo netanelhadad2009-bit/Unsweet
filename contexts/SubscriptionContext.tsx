@@ -11,6 +11,7 @@ import Purchases, {
   PurchasesOffering,
   PurchasesPackage,
   LOG_LEVEL,
+  PURCHASES_ERROR_CODE,
 } from 'react-native-purchases';
 import { Alert, Platform } from 'react-native';
 import { supabase } from '../lib/supabase';
@@ -406,6 +407,59 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
       // Handle user cancellation silently
       if (error.userCancelled) {
         return false;
+      }
+
+      // ============================================================
+      // PRODUCT_ALREADY_PURCHASED: Auto-restore instead of showing error
+      // This happens when Apple/Google ID already owns the subscription
+      // but the current App User ID doesn't have it yet.
+      // RevenueCat is configured to "Transfer to new App User ID" so
+      // restoring will sync the subscription to the current user.
+      // ============================================================
+      if (error.code === PURCHASES_ERROR_CODE.PRODUCT_ALREADY_PURCHASED) {
+        console.log('[Subscription] Product already purchased - attempting auto-restore...');
+
+        try {
+          const restoredInfo = await Purchases.restorePurchases();
+          const hasProEntitlement = typeof restoredInfo.entitlements.active[PRO_ENTITLEMENT_ID] !== 'undefined';
+
+          if (hasProEntitlement) {
+            // Get current user for ownership tracking
+            const { data: { user } } = await supabase.auth.getUser();
+            if (user?.id) {
+              // Check ownership before granting access
+              const storedOwnerId = await AsyncStorage.getItem(SUBSCRIPTION_OWNER_KEY);
+
+              if (storedOwnerId && storedOwnerId !== user.id) {
+                // Different owner - subscription belongs to another account
+                console.log('[Subscription] ⚠️ Auto-restore blocked: subscription belongs to different user');
+                setCustomerInfo(restoredInfo);
+                setIsPro(false);
+                Alert.alert(
+                  'Subscription Conflict',
+                  'This subscription is linked to a different account. Please log in with the original account.'
+                );
+                return false;
+              }
+
+              // Claim ownership and grant access
+              await AsyncStorage.setItem(SUBSCRIPTION_OWNER_KEY, user.id);
+              console.log('[Subscription] ✓ Auto-restore successful, owner recorded:', user.id);
+              setIsPro(true);
+              setCustomerInfo(restoredInfo);
+              return true;
+            }
+          }
+
+          // Restore didn't find entitlement - shouldn't happen but handle gracefully
+          console.warn('[Subscription] Auto-restore completed but no entitlement found');
+          setCustomerInfo(restoredInfo);
+          return false;
+        } catch (restoreError) {
+          console.error('[Subscription] Auto-restore failed:', restoreError);
+          Alert.alert('Sync Failed', 'Unable to sync your subscription. Please try "Restore Purchases".');
+          return false;
+        }
       }
 
       console.error('[Subscription] Purchase failed:', error);
