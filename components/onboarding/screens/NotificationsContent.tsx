@@ -79,12 +79,22 @@ export default function NotificationsContent() {
   async function checkPermissionStatus() {
     if (!Device.isDevice) { setPermissionStatus('prompt'); return; }
     try {
-      const { status } = await Notifications.getPermissionsAsync();
-      const isGranted = status === 'granted';
-      const isDenied = status === 'denied';
-      if (isGranted) { goToNextScreen(); }
-      else if (isDenied) { setPermissionStatus('denied'); }
-      else { setPermissionStatus('prompt'); }
+      // ============================================================
+      // ANDROID 13+ FIX: Check canAskAgain to determine if we can
+      // show the native permission dialog or need to redirect to Settings
+      // ============================================================
+      const { status, canAskAgain } = await Notifications.getPermissionsAsync();
+
+      if (status === 'granted') {
+        // Already granted - skip this screen
+        goToNextScreen();
+      } else if (status === 'denied' && canAskAgain === false) {
+        // Permanently denied - must use Settings (Android "Don't ask again" or iOS denied)
+        setPermissionStatus('denied');
+      } else {
+        // Undetermined OR denied-but-can-ask-again - show prompt to trigger native dialog
+        setPermissionStatus('prompt');
+      }
     } catch { setPermissionStatus('prompt'); }
   }
 
@@ -104,7 +114,7 @@ export default function NotificationsContent() {
       // Request notification permissions
       // On Android 13+, this triggers the POST_NOTIFICATIONS runtime permission dialog
       // On iOS, this triggers the standard iOS notification permission dialog
-      const { status } = await Notifications.requestPermissionsAsync({
+      const { status, canAskAgain } = await Notifications.requestPermissionsAsync({
         android: {
           // Request all notification capabilities on Android
           allowAlert: true,
@@ -114,14 +124,18 @@ export default function NotificationsContent() {
         },
       });
 
-      const isGranted = status === 'granted';
-      if (isGranted) {
+      if (status === 'granted') {
         setPermissionStatus('granted');
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         setTimeout(() => goToNextScreen(), 500);
-      } else {
+      } else if (canAskAgain === false) {
+        // User permanently denied - show settings UI
         setPermissionStatus('denied');
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      } else {
+        // User denied but can ask again - continue without blocking
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+        setTimeout(() => goToNextScreen(), 500);
       }
     } catch {
       // On error, continue to next screen rather than blocking the user
