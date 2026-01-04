@@ -26,6 +26,9 @@ import { useRouter, Stack } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import * as WebBrowser from 'expo-web-browser';
 import * as AppleAuthentication from 'expo-apple-authentication';
+
+// Ensure the web browser closes properly after OAuth authentication
+WebBrowser.maybeCompleteAuthSession();
 import Svg, { Path } from 'react-native-svg';
 import { supabase } from '../../lib/supabase';
 import { Theme } from '../../constants/Theme';
