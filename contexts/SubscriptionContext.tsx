@@ -47,6 +47,7 @@ interface SubscriptionContextType {
   isLoading: boolean;
   isInitialized: boolean;
   isSyncingUser: boolean; // True while syncing RevenueCat user after login
+  isProDetermined: boolean; // True after isPro has been explicitly set (not default)
   currentOffering: PurchasesOffering | null;
   customerInfo: CustomerInfo | null;
   checkStatus: () => Promise<void>;
@@ -64,11 +65,18 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const [isInitialized, setIsInitialized] = useState(false);
   const [isSyncingUser, setIsSyncingUser] = useState(false); // Tracks RevenueCat user sync after login
+  const [isProDetermined, setIsProDetermined] = useState(false); // True after isPro explicitly set
   const [currentOffering, setCurrentOffering] = useState<PurchasesOffering | null>(null);
   const [customerInfo, setCustomerInfo] = useState<CustomerInfo | null>(null);
 
   // Track current RevenueCat user ID to avoid redundant login calls
   const currentRevenueCatUserId = useRef<string | null>(null);
+
+  // Sync deduplication - prevents racing calls to syncRevenueCatUser
+  const syncInProgressRef = useRef<string | null>(null);
+
+  // Track if logout is in progress to prevent granting Pro during logout race
+  const isLoggingOutRef = useRef(false);
 
   // Initialize RevenueCat
   useEffect(() => {
@@ -117,14 +125,36 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
     initPurchases();
 
     // Listen for customer info updates
+    // IMPORTANT: This listener fires on ANY subscription change from RevenueCat
+    // We need to handle it carefully to avoid race conditions with login/logout
+    let listenerDebounceTimer: NodeJS.Timeout | null = null;
     const customerInfoListener = (info: CustomerInfo) => {
-      updateProStatus(info);
-      setCustomerInfo(info);
+      // Debounce rapid listener calls (RevenueCat can fire multiple times quickly)
+      if (listenerDebounceTimer) {
+        clearTimeout(listenerDebounceTimer);
+      }
+      listenerDebounceTimer = setTimeout(async () => {
+        // Skip if logout is in progress - don't grant Pro during logout
+        if (isLoggingOutRef.current) {
+          console.log('[Subscription] Skipping listener during logout');
+          return;
+        }
+        // Skip if sync is in progress - let sync handle the update
+        if (syncInProgressRef.current) {
+          console.log('[Subscription] Skipping listener during sync');
+          return;
+        }
+        await updateProStatus(info);
+        setCustomerInfo(info);
+      }, 100); // 100ms debounce
     };
 
     Purchases.addCustomerInfoUpdateListener(customerInfoListener);
 
     return () => {
+      if (listenerDebounceTimer) {
+        clearTimeout(listenerDebounceTimer);
+      }
       Purchases.removeCustomerInfoUpdateListener(customerInfoListener);
     };
   }, []);
@@ -136,15 +166,36 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
     if (!isInitialized) return;
 
     const syncRevenueCatUser = async (userId: string | null, isLogin = false) => {
+      const syncKey = userId || 'logout';
+
+      // DEDUPLICATION: Skip if same sync already in progress
+      if (syncInProgressRef.current === syncKey) {
+        console.log('[Subscription] Sync already in progress for:', syncKey);
+        return;
+      }
+
+      // Mark sync as in progress
+      syncInProgressRef.current = syncKey;
+
+      // Track logout state to prevent race conditions
+      if (!userId) {
+        isLoggingOutRef.current = true;
+      }
+
+      // Reset isProDetermined at start of sync
+      setIsProDetermined(false);
+
       // Safety timeout to prevent infinite white screen
       let timeoutId: NodeJS.Timeout | null = null;
       if (isLogin && userId) {
         setIsSyncingUser(true);
-        // Timeout after 5 seconds to prevent white screen of death
+        // Timeout after 10 seconds (increased from 5s for slow networks)
         timeoutId = setTimeout(() => {
           console.warn('[Subscription] ⚠️ Sync timeout - clearing sync state');
           setIsSyncingUser(false);
-        }, 5000);
+          setIsProDetermined(true); // Mark as determined even on timeout
+          syncInProgressRef.current = null;
+        }, 10000);
       }
 
       try {
@@ -164,10 +215,29 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
         } else {
           // User logged out - reset to anonymous user
           if (currentRevenueCatUserId.current !== null) {
-            const info = await Purchases.logOut();
-            currentRevenueCatUserId.current = null;
-            await updateProStatus(info, null);
-            setCustomerInfo(info);
+            // Wrap logOut with timeout to prevent hanging
+            const logoutWithTimeout = Promise.race([
+              Purchases.logOut(),
+              new Promise<CustomerInfo>((_, reject) =>
+                setTimeout(() => reject(new Error('Logout timeout')), 5000)
+              )
+            ]);
+            try {
+              const info = await logoutWithTimeout;
+              currentRevenueCatUserId.current = null;
+              setIsPro(false);
+              setIsProDetermined(true);
+              setCustomerInfo(info);
+            } catch (logoutError) {
+              console.warn('[Subscription] RevenueCat logout timeout, continuing anyway');
+              currentRevenueCatUserId.current = null;
+              setIsPro(false);
+              setIsProDetermined(true);
+            }
+          } else {
+            // Already logged out from RevenueCat
+            setIsPro(false);
+            setIsProDetermined(true);
           }
         }
       } catch (error) {
@@ -183,7 +253,8 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
           if (userId) {
             await updateProStatus(fallbackInfo, userId);
           } else {
-            await updateProStatus(fallbackInfo);
+            setIsPro(false);
+            setIsProDetermined(true);
           }
           setCustomerInfo(fallbackInfo);
           console.log('[Subscription] ✓ Fallback customer info retrieved');
@@ -191,6 +262,7 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
           console.error('[Subscription] ❌ Fallback also failed:', fallbackError);
           // Last resort: explicitly set isPro to false so navigation can proceed
           setIsPro(false);
+          setIsProDetermined(true);
         }
       } finally {
         // Clear timeout and syncing state
@@ -198,28 +270,41 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
         if (isLogin) {
           setIsSyncingUser(false);
         }
+        // Clear sync in progress flag
+        syncInProgressRef.current = null;
+        // Clear logout flag
+        if (!userId) {
+          isLoggingOutRef.current = false;
+        }
       }
     };
 
-    // Get initial session and sync (mark as login to block navigation)
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.user?.id) {
-        syncRevenueCatUser(session.user.id, true);
-      } else {
-        // No session - make sure sync state is cleared
-        setIsSyncingUser(false);
-        syncRevenueCatUser(null, false);
-      }
-    });
-
     // Listen for auth state changes
+    // IMPORTANT: onAuthStateChange fires with INITIAL_SESSION on app start,
+    // so we don't need a separate getSession() call
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
-        if (event === 'SIGNED_IN' && session?.user?.id) {
-          // Sync immediately with login flag to block navigation until complete
+        console.log('[Subscription] Auth state change:', event);
+
+        if (event === 'INITIAL_SESSION') {
+          // App just started - check if user has session
+          if (session?.user?.id) {
+            await syncRevenueCatUser(session.user.id, true);
+          } else {
+            // No session on start - ensure state is clean
+            setIsSyncingUser(false);
+            setIsPro(false);
+            setIsProDetermined(true);
+          }
+        } else if (event === 'SIGNED_IN' && session?.user?.id) {
+          // User just signed in - sync with login flag to block navigation
           await syncRevenueCatUser(session.user.id, true);
         } else if (event === 'SIGNED_OUT') {
+          // User signed out
           await syncRevenueCatUser(null, false);
+        } else if (event === 'TOKEN_REFRESHED' && session?.user?.id) {
+          // Token refreshed - don't block navigation, just update status
+          await syncRevenueCatUser(session.user.id, false);
         }
       }
     );
@@ -232,8 +317,17 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
   const updateProStatus = async (info: CustomerInfo, userId?: string | null) => {
     const hasProEntitlement = typeof info.entitlements.active[PRO_ENTITLEMENT_ID] !== 'undefined';
 
+    // RACE CONDITION FIX: If logout is in progress, don't grant Pro
+    if (isLoggingOutRef.current) {
+      console.log('[Subscription] Logout in progress - denying Pro access');
+      setIsPro(false);
+      setIsProDetermined(true);
+      return;
+    }
+
     if (!hasProEntitlement) {
       setIsPro(false);
+      setIsProDetermined(true);
       return;
     }
 
@@ -246,6 +340,7 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
         if (storedOwnerId === userId) {
           console.log('[Subscription] ✓ Owner verified, granting Pro access');
           setIsPro(true);
+          setIsProDetermined(true);
           return;
         }
 
@@ -255,6 +350,7 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
           console.log('[Subscription] Transferring subscription ownership from', storedOwnerId, 'to', userId);
           await AsyncStorage.setItem(SUBSCRIPTION_OWNER_KEY, userId);
           setIsPro(true);
+          setIsProDetermined(true);
           return;
         }
 
@@ -266,17 +362,28 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
           console.log('[Subscription] ✓ No owner recorded, claiming ownership for current user');
           await AsyncStorage.setItem(SUBSCRIPTION_OWNER_KEY, userId);
           setIsPro(true);
+          setIsProDetermined(true);
           return;
         }
       } catch (error) {
         console.error('[Subscription] Error checking ownership:', error);
         // On error, still grant access if entitlement exists (fail open for UX)
         setIsPro(true);
+        setIsProDetermined(true);
         return;
       }
     } else {
       // No userId provided - try to get current user from Supabase
       // This handles the case when RevenueCat listener fires without userId context
+
+      // RACE CONDITION FIX: Check logout state again before granting Pro
+      if (isLoggingOutRef.current) {
+        console.log('[Subscription] Logout in progress (no userId path) - denying Pro access');
+        setIsPro(false);
+        setIsProDetermined(true);
+        return;
+      }
+
       try {
         const { data: { user } } = await supabase.auth.getUser();
         if (user?.id) {
@@ -289,11 +396,13 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
         // fires before Supabase session is fully established
         console.log('[Subscription] No user session yet but has entitlement - granting Pro access');
         setIsPro(true);
+        setIsProDetermined(true);
         return;
       } catch {
         // If we can't get user but have entitlement, grant access for UX
         console.log('[Subscription] Error getting user but has entitlement - granting Pro access');
         setIsPro(true);
+        setIsProDetermined(true);
         return;
       }
     }
@@ -301,6 +410,7 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
     // This line should never be reached now, but keep as safety fallback
     // Truly anonymous (no session) - don't grant Pro
     setIsPro(false);
+    setIsProDetermined(true);
   };
 
   // Check subscription status
@@ -474,6 +584,7 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
         isLoading,
         isInitialized,
         isSyncingUser,
+        isProDetermined,
         currentOffering,
         customerInfo,
         checkStatus,

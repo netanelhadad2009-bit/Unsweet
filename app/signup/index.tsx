@@ -55,6 +55,7 @@ import { useOnboarding } from '../../contexts/OnboardingContext';
 import { Theme } from '../../constants/Theme';
 import { OnboardingAnswers } from '../../types/onboarding';
 import { translateAuthError, isValidEmail } from '../../lib/auth/errors';
+import { usePostHog } from 'posthog-react-native';
 import {
   checkRateLimit,
   recordFailedAttempt,
@@ -116,6 +117,7 @@ const getOAuthRedirectUrl = (): string => {
 export default function SignUpScreen() {
   const router = useRouter();
   const { onboardingData } = useOnboarding();
+  const posthog = usePostHog();
 
   // Form state
   const [authMode] = useState<AuthMode>('signup');
@@ -134,16 +136,12 @@ export default function SignUpScreen() {
   // Ref to track if component is mounted (prevents state updates after unmount)
   const isMountedRef = useRef(true);
 
-  // Auth state listener - used for session management
-  // All auth flows (email, Apple, Google) now call handleAuthSuccess directly
-  useEffect(() => {
-    const { data: authListener } = supabase.auth.onAuthStateChange(() => {
-      // Auth state changes are handled by individual auth flows
-    });
+  // NOTE: No auth listener needed here - auth flows call handleAuthSuccess directly
+  // This avoids race conditions between listeners and direct handler navigation
 
+  // Cleanup: mark as unmounted when component unmounts
+  useEffect(() => {
     return () => {
-      authListener.subscription.unsubscribe();
-      // Cleanup: mark as unmounted
       isMountedRef.current = false;
     };
   }, []);
@@ -202,6 +200,11 @@ export default function SignUpScreen() {
     try {
       // Track registration completion for analytics funnel
       trackRegistrationComplete(authMethod);
+
+      // PostHog: Track signup completed
+      posthog?.capture('signup_completed', {
+        auth_method: authMethod,
+      });
 
       // Check if we have onboarding data to save (signup mode)
       const hasOnboardingData = onboardingData.main_goals && onboardingData.main_goals.length > 0;

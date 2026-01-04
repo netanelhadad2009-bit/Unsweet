@@ -32,6 +32,7 @@ import { useSubscription } from '../../contexts/SubscriptionContext';
 import { supabase } from '../../lib/supabase';
 import { Theme } from '../../constants/Theme';
 import { TERMS_URL, PRIVACY_URL } from '../../constants/Links';
+import { usePostHog } from 'posthog-react-native';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -119,6 +120,7 @@ function PlanCard({ title, badge, price, period, subtext, isSelected, onSelect }
 export default function Paywall() {
   const router = useRouter();
   const { isPro, restorePurchases, isInitialized, purchasePackage, isSyncingUser } = useSubscription();
+  const posthog = usePostHog();
 
   // Track if user is authenticated - paywall should only show for logged-in non-Pro users
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
@@ -153,6 +155,13 @@ export default function Paywall() {
       setIsAuthenticated(!!session);
     });
   }, []);
+
+  // PostHog: Track paywall viewed
+  useEffect(() => {
+    if (isAuthenticated && !isPro && !isSyncingUser) {
+      posthog?.capture('paywall_viewed');
+    }
+  }, [isAuthenticated, isPro, isSyncingUser, posthog]);
 
   // Fetch offerings from RevenueCat
   const fetchOfferings = useCallback(async () => {
@@ -280,13 +289,12 @@ export default function Paywall() {
     return () => clearTimeout(timeout);
   }, [isInitialized, fetchOfferings]);
 
-  // Redirect if Pro (but NOT during active purchase flow)
-  useEffect(() => {
-    // Don't auto-redirect during purchase - let the success alert handle navigation
-    if (isPro && !isPurchasingRef.current) {
-      router.replace('/(tabs)');
-    }
-  }, [isPro, router]);
+  // REMOVED: Redirect effect that was causing double navigation
+  // Navigation is now handled ONLY in:
+  // 1. handlePurchase success alert onPress
+  // 2. handleRestore (via context's restorePurchases which shows success alert)
+  // 3. SubscriptionGate in _layout.tsx (for returning Pro users)
+  // This prevents race conditions where both the effect AND the alert trigger navigation
 
   // FLICKER PREVENTION: Don't render paywall UI until we know user should see it
   // This prevents brief flash of paywall during navigation transitions
@@ -318,17 +326,30 @@ export default function Paywall() {
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
+    // PostHog: Track subscription started
+    posthog?.capture('subscription_started', {
+      plan_id: selectedPackage.identifier,
+      plan_type: selectedPackage.packageType,
+      price: selectedPackage.product.priceString,
+      currency: selectedPackage.product.currencyCode,
+    });
+
     // Set purchasing flag BEFORE starting - prevents white screen
     isPurchasingRef.current = true;
     setIsPurchasing(true);
+
+    // Track success locally - don't rely on isPro state which may be stale
+    let purchaseSucceeded = false;
 
     try {
       // Use context's purchasePackage which has ownership/ghosting protection
       const success = await purchasePackage(selectedPackage);
 
       if (success) {
+        purchaseSucceeded = true;
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         // Show success alert, then navigate on dismiss
+        // isPurchasingRef stays true until alert is dismissed to prevent white screen
         Alert.alert('Welcome to Pro!', 'You now have full access to all features.', [
           {
             text: 'Let\'s Go!',
@@ -338,9 +359,8 @@ export default function Paywall() {
             }
           }
         ]);
-        // Don't clear isPurchasingRef here - wait for alert dismissal
         setIsPurchasing(false);
-        return;
+        return; // Don't clear isPurchasingRef here - wait for alert dismissal
       }
       // If not successful, the purchasePackage function shows appropriate alerts
     } catch (error: unknown) {
@@ -354,8 +374,9 @@ export default function Paywall() {
       }
     } finally {
       setIsPurchasing(false);
-      // Clear purchasing flag on failure/cancel (success clears on alert dismiss)
-      if (!isPro) {
+      // Clear purchasing flag on ALL failure/cancel paths
+      // Only keep it true if purchase succeeded (waiting for alert dismiss)
+      if (!purchaseSucceeded) {
         isPurchasingRef.current = false;
       }
     }
@@ -376,6 +397,10 @@ export default function Paywall() {
   // Skip (DEV only)
   const handleSkip = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    // PostHog: Track subscription cancelled/skipped
+    posthog?.capture('subscription_cancelled', {
+      reason: 'user_skipped',
+    });
     router.replace('/(tabs)');
   };
 

@@ -24,7 +24,7 @@
         "ITSAppUsesNonExemptEncryption": false,
         "NSUserTrackingUsageDescription": "This identifier will be used to deliver personalized ads and measure ad effectiveness."
       },
-      "buildNumber": "45"
+      "buildNumber": "46"
     },
     "android": {
       "adaptiveIcon": {
@@ -100,6 +100,7 @@
         }
       ],
       "expo-tracking-transparency",
+      "expo-localization",
       "./plugins/withAndroidManifestFix"
     ],
     "extra": {

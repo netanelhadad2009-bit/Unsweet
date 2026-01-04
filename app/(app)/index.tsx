@@ -3,11 +3,15 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Theme } from '../../constants/Theme';
 import { supabase } from '../../lib/supabase';
+import { clearAllUserData } from '../../services/UserDataService';
 
 export default function HomeScreen() {
   const router = useRouter();
 
   const handleSignOut = async () => {
+    // Clear all user data (AsyncStorage + RevenueCat) before signing out
+    // This prevents data leakage between users and subscription ghosting
+    await clearAllUserData();
     await supabase.auth.signOut();
     router.replace('/');
   };

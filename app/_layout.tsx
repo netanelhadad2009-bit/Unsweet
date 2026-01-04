@@ -8,7 +8,7 @@
  * - Splash screen control to prevent flash of unauthenticated content
  */
 
-import { Stack, useRouter, useSegments, Redirect } from 'expo-router';
+import { Stack, useRouter, useSegments, usePathname, Redirect } from 'expo-router';
 import { View, StyleSheet, Text, Pressable, Image, Modal, Platform, InteractionManager, I18nManager, BackHandler } from 'react-native';
 import { useEffect, useState, useCallback, useRef } from 'react';
 
@@ -61,6 +61,26 @@ import { SubscriptionProvider, useSubscription } from '../contexts/SubscriptionC
 import { supabase } from '../lib/supabase';
 import { Session } from '@supabase/supabase-js';
 import { initializeNotifications } from '../services/notificationService';
+import { PostHogProvider, usePostHog } from 'posthog-react-native';
+
+// Screen View Tracker - Automatically tracks screen changes for analytics
+function ScreenViewTracker() {
+  const pathname = usePathname();
+  const posthog = usePostHog();
+  const previousPathnameRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    // Only track if pathname has changed (avoid duplicate events on re-renders)
+    if (pathname && pathname !== previousPathnameRef.current) {
+      posthog?.capture('$screen', {
+        $screen_name: pathname,
+      });
+      previousPathnameRef.current = pathname;
+    }
+  }, [pathname, posthog]);
+
+  return null; // This component doesn't render anything
+}
 
 // Inner component that handles subscription-based routing
 // Must be inside SubscriptionProvider to use useSubscription
@@ -68,7 +88,7 @@ import { initializeNotifications } from '../services/notificationService';
 // Also handles redirecting logged-in users from landing page to the right destination
 function SubscriptionGate({ children, session }: { children: React.ReactNode; session: Session | null }) {
   const segments = useSegments();
-  const { isPro, isLoading, isInitialized, isSyncingUser } = useSubscription();
+  const { isPro, isLoading, isInitialized, isSyncingUser, isProDetermined } = useSubscription();
 
   const inTabsGroup = segments[0] === '(tabs)';
   const isOnLandingPage = !segments[0] || segments[0] === 'index';
@@ -76,7 +96,9 @@ function SubscriptionGate({ children, session }: { children: React.ReactNode; se
 
   // Check if we're still waiting for subscription status
   // Include isSyncingUser to wait for RevenueCat to identify returning users
-  const isWaitingForStatus = !isInitialized || isLoading || isSyncingUser;
+  // CRITICAL: Also wait for isProDetermined to ensure isPro has been explicitly set
+  // This prevents redirects based on the default isPro=false before sync completes
+  const isWaitingForStatus = !isInitialized || isLoading || isSyncingUser || !isProDetermined;
 
   // CRITICAL: For logged-in users, wait for subscription status before any redirect
   // This prevents the flash of paywall for Pro users (including returning subscribers)
@@ -117,6 +139,7 @@ function SubscriptionGate({ children, session }: { children: React.ReactNode; se
 export default function RootLayout() {
   const router = useRouter();
   const segments = useSegments();
+  const posthog = usePostHog();
 
   const [session, setSession] = useState<Session | null>(null);
   const [initialized, setInitialized] = useState(false);
@@ -168,6 +191,9 @@ export default function RootLayout() {
         // IMPORTANT: Set forceShowLanding BEFORE session to ensure proper render order
         // When user signs out, force show landing page (unless skipped for login verification)
         if (event === 'SIGNED_OUT') {
+          // PostHog: Reset user identity on logout for data privacy
+          posthog?.reset();
+
           if (skipNextLandingModal) {
             skipNextLandingModal = false; // Reset the flag
           } else {
@@ -177,6 +203,13 @@ export default function RootLayout() {
 
         // When user signs in, allow normal navigation
         if (event === 'SIGNED_IN') {
+          // PostHog: Identify user on login
+          if (newSession?.user) {
+            posthog?.identify(newSession.user.id, {
+              email: newSession.user.email,
+            });
+          }
+
           setForceShowLanding(false);
         }
 
@@ -188,7 +221,7 @@ export default function RootLayout() {
     );
 
     return () => subscription.unsubscribe();
-  }, []);
+  }, [posthog]);
 
   // Auth stability delay - prevents race conditions during LOGOUT only
   // We don't reset on login because it interferes with pending navigation (signup → plan-ready)
@@ -429,6 +462,14 @@ export default function RootLayout() {
   const showLandingOverlay = forceShowLanding && !session;
 
   return (
+    <PostHogProvider
+      apiKey="phc_c2ED0tBSqsuVpnJiM8WUUqSbwEYoGeFcWnKUz7NuQ5H"
+      options={{
+        host: "https://us.i.posthog.com",
+        enableSessionReplay: true,
+      }}
+    >
+    <ScreenViewTracker />
     <SubscriptionProvider>
     <OnboardingProvider>
       <SubscriptionGate session={session}>
@@ -591,6 +632,7 @@ export default function RootLayout() {
       </SubscriptionGate>
     </OnboardingProvider>
     </SubscriptionProvider>
+    </PostHogProvider>
   );
 }
 

@@ -30,6 +30,7 @@ import Svg, { Path } from 'react-native-svg';
 import { supabase } from '../../lib/supabase';
 import { Theme } from '../../constants/Theme';
 import { translateAuthError, isValidEmail } from '../../lib/auth/errors';
+import { clearAllUserData } from '../../services/UserDataService';
 import {
   checkRateLimit,
   recordFailedAttempt,
@@ -165,7 +166,7 @@ export default function LoginScreen() {
       const hasCompletedRegistration = await checkUserHasCompletedRegistration(userId);
 
       if (!hasCompletedRegistration) {
-        // User hasn't completed registration - sign them out and show error
+        // User hasn't completed registration - clean up and sign them out
 
         const errorMessage = 'No account found with this email. Please sign up first to create an account.';
 
@@ -175,6 +176,9 @@ export default function LoginScreen() {
         // Set persisted error BEFORE signOut (survives Stack remount)
         setPersistedLoginError(errorMessage);
 
+        // Clear all user data (AsyncStorage + RevenueCat) before signing out
+        // This prevents data leakage and subscription ghosting
+        await clearAllUserData();
         await supabase.auth.signOut();
 
         // Also set local error in case remount doesn't happen
@@ -200,17 +204,8 @@ export default function LoginScreen() {
     }
   };
 
-  // Listen for auth state changes
-  // Button handlers directly manage auth flow to avoid race conditions
-  useEffect(() => {
-    const { data: authListener } = supabase.auth.onAuthStateChange(async () => {
-      // Auth state changes are handled by button handlers
-    });
-
-    return () => {
-      authListener.subscription.unsubscribe();
-    };
-  }, []);
+  // NOTE: No auth listener needed here - button handlers manage auth flow directly
+  // This avoids race conditions between listeners and direct handler navigation
 
   /**
    * Email/Password Sign In
